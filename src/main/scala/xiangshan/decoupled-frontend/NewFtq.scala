@@ -18,11 +18,12 @@ package xiangshan.frontend
 import chipsalliance.rocketchip.config.Parameters
 import chisel3._
 import chisel3.util._
-import utils.{AsyncDataModuleTemplate, CircularQueuePtr, DataModuleTemplate, HasCircularQueuePtrHelper, SRAMTemplate, SyncDataModuleTemplate, XSDebug, XSPerfAccumulate, XSError}
+import utils.{AsyncDataModuleTemplate, CircularQueuePtr, DataModuleTemplate, HasCircularQueuePtrHelper, SRAMTemplate, SyncDataModuleTemplate, XSDebug, XSError, XSPerfAccumulate}
 import xiangshan._
+
 import scala.tools.nsc.doc.model.Val
-import utils.{ParallelPriorityMux, ParallelPriorityEncoder}
-import xiangshan.backend.{CtrlToFtqIO}
+import utils.{ParallelPriorityEncoder, ParallelPriorityMux}
+import xiangshan.backend.CtrlToFtqIO
 
 class FtqPtr(implicit p: Parameters) extends CircularQueuePtr[FtqPtr](
   p => p(XSCoreParamsKey).FtqSize
@@ -170,6 +171,11 @@ class FtqRead[T <: Data](private val gen: T)(implicit p: Parameters) extends XSB
 class FtqToBpuIO(implicit p: Parameters) extends XSBundle {
   val redirect = Valid(new BranchPredictionRedirect)
   val update = Valid(new BranchPredictionUpdate)
+}
+
+class FtqToBpuIOWrapper(implicit p: Parameters) extends XSBundle {
+  val redirect = Valid(new BranchPredictionRedirectWrapper)
+  val update = Valid(new BranchPredictionUpdateWrapper)
 }
 
 class FtqToIfuIO(implicit p: Parameters) extends XSBundle {

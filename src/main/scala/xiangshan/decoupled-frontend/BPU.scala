@@ -223,9 +223,18 @@ class BpuToFtqIO(implicit p: Parameters) extends XSBundle {
   val resp = DecoupledIO(new BranchPredictionBundle)
 }
 
+class BpuToFtqIOWrapper(implicit p: Parameters) extends XSBundle {
+  val resp = DecoupledIO(new BranchPredictionBundleWrapper)
+}
+
 class PredictorIO(implicit p: Parameters) extends XSBundle {
   val bpu_to_ftq = new BpuToFtqIO()
   val ftq_to_bpu = Flipped(new FtqToBpuIO())
+}
+
+class PredictorIOWrapper(implicit p: Parameters) extends XSBundle {
+  val bpu_to_ftq = new BpuToFtqIOWrapper()
+  val ftq_to_bpu = Flipped(new FtqToBpuIOWrapper())
 }
 
 class FakeBPU(implicit p: Parameters) extends XSModule with HasBPUConst {
@@ -479,4 +488,83 @@ class Predictor(implicit p: Parameters) extends XSModule with HasBPUConst {
     XSPerfAccumulate("s2_redirect", s2_redirect)
     XSPerfAccumulate("s3_redirect", s3_redirect)
   }
+}
+
+class FakeBPUWrapper(implicit p: Parameters) extends XSModule with HasBPUConst {
+  val io = IO(new PredictorIOWrapper)
+  
+  val predictor = Module(new Predictor)
+  
+  def UIntToVecUInt(vecsize: Int, vecwidth: Int, data: UInt) = {
+    val ret = Wire(Vec(vecsize, UInt(vecwidth.W)))
+    for (i <- 0 until vecsize) {
+      ret(i) := (data >> (i * vecwidth).U)(vecwidth - 1, 0)
+    }
+    ret
+  }
+  def UIntToVecBool(vecsize: Int, data: UInt) = {
+    val ret = Wire(Vec(vecsize, Bool()))
+    for (i <- 0 until vecsize) {
+      ret(i) := (data >> i.U)(0)
+    }
+    ret
+  }
+  
+  // io.ftq_to_bpu <> predictor.io.ftq_to_bpu
+  predictor.io.ftq_to_bpu.update.valid := io.ftq_to_bpu.update.valid
+  predictor.io.ftq_to_bpu.update.bits.new_br_insert_pos := UIntToVecBool(numBr, io.ftq_to_bpu.update.bits.new_br_insert_pos)
+  predictor.io.ftq_to_bpu.update.bits.false_hit := io.ftq_to_bpu.update.bits.false_hit
+  predictor.io.ftq_to_bpu.update.bits.mispred_mask := UIntToVecBool(numBr + 1, io.ftq_to_bpu.update.bits.mispred_mask)
+  // BranchPredictionBundle signals
+  predictor.io.ftq_to_bpu.update.bits.pc := io.ftq_to_bpu.update.bits.pc
+  predictor.io.ftq_to_bpu.update.bits.hit := io.ftq_to_bpu.update.bits.hit
+  predictor.io.ftq_to_bpu.update.bits.ghist := io.ftq_to_bpu.update.bits.ghist
+  predictor.io.ftq_to_bpu.update.bits.rasSp := io.ftq_to_bpu.update.bits.rasSp
+  predictor.io.ftq_to_bpu.update.bits.rasTop := io.ftq_to_bpu.update.bits.rasTop
+  predictor.io.ftq_to_bpu.update.bits.meta := io.ftq_to_bpu.update.bits.meta
+  predictor.io.ftq_to_bpu.update.bits.ftb_entry := DontCare
+  for (i <- 0 until numBr) {
+    predictor.io.ftq_to_bpu.update.bits.ftb_entry.brTargets(i) := io.ftq_to_bpu.update.bits.preds.target
+    predictor.io.ftq_to_bpu.update.bits.ftb_entry.brValids(i) := io.ftq_to_bpu.update.bits.preds.taken_mask(i)
+  }
+  
+  
+  predictor.io.ftq_to_bpu.update.bits.specCnt := UIntToVecUInt(numBr, 10, io.ftq_to_bpu.update.bits.specCnt)
+  
+  // preds
+  predictor.io.ftq_to_bpu.update.bits.preds.is_jal := io.ftq_to_bpu.update.bits.preds.is_jal
+  predictor.io.ftq_to_bpu.update.bits.preds.is_jalr := io.ftq_to_bpu.update.bits.preds.is_jalr
+  predictor.io.ftq_to_bpu.update.bits.preds.is_call := io.ftq_to_bpu.update.bits.preds.is_call
+  predictor.io.ftq_to_bpu.update.bits.preds.is_ret := io.ftq_to_bpu.update.bits.preds.is_ret
+  predictor.io.ftq_to_bpu.update.bits.preds.call_is_rvc := io.ftq_to_bpu.update.bits.preds.call_is_rvc
+  predictor.io.ftq_to_bpu.update.bits.preds.target := io.ftq_to_bpu.update.bits.preds.target
+  predictor.io.ftq_to_bpu.update.bits.preds.hit := io.ftq_to_bpu.update.bits.preds.hit
+  predictor.io.ftq_to_bpu.update.bits.preds.taken_mask := UIntToVecBool(numBr + 1, io.ftq_to_bpu.update.bits.preds.taken_mask)
+  predictor.io.ftq_to_bpu.update.bits.preds.is_br := UIntToVecBool(numBr, io.ftq_to_bpu.update.bits.preds.is_br)
+  
+  // redirect
+  predictor.io.ftq_to_bpu.redirect.bits := DontCare
+  predictor.io.ftq_to_bpu.redirect.valid := io.ftq_to_bpu.redirect.valid
+  predictor.io.ftq_to_bpu.redirect.bits.cfiUpdate.target := io.ftq_to_bpu.redirect.bits.cfiUpdate.target
+  
+  io.bpu_to_ftq.resp.valid := predictor.io.bpu_to_ftq.resp.valid
+  predictor.io.bpu_to_ftq.resp.ready := io.bpu_to_ftq.resp.ready
+  io.bpu_to_ftq.resp.bits.preds.taken_mask := predictor.io.bpu_to_ftq.resp.bits.preds.taken_mask.asUInt()
+  io.bpu_to_ftq.resp.bits.preds.is_br := predictor.io.bpu_to_ftq.resp.bits.preds.is_br.asUInt()
+  io.bpu_to_ftq.resp.bits.preds.is_jal := predictor.io.bpu_to_ftq.resp.bits.preds.is_jal
+  io.bpu_to_ftq.resp.bits.preds.is_jalr := predictor.io.bpu_to_ftq.resp.bits.preds.is_jalr
+  io.bpu_to_ftq.resp.bits.preds.is_call := predictor.io.bpu_to_ftq.resp.bits.preds.is_call
+  io.bpu_to_ftq.resp.bits.preds.is_ret := predictor.io.bpu_to_ftq.resp.bits.preds.is_ret
+  io.bpu_to_ftq.resp.bits.preds.call_is_rvc := predictor.io.bpu_to_ftq.resp.bits.preds.call_is_rvc
+  io.bpu_to_ftq.resp.bits.preds.target := predictor.io.bpu_to_ftq.resp.bits.preds.target
+  io.bpu_to_ftq.resp.bits.preds.hit := predictor.io.bpu_to_ftq.resp.bits.preds.hit
+  io.bpu_to_ftq.resp.bits.pc := predictor.io.bpu_to_ftq.resp.bits.pc
+  io.bpu_to_ftq.resp.bits.hit := predictor.io.bpu_to_ftq.resp.bits.hit
+  io.bpu_to_ftq.resp.bits.ghist := predictor.io.bpu_to_ftq.resp.bits.ghist
+  io.bpu_to_ftq.resp.bits.rasSp := predictor.io.bpu_to_ftq.resp.bits.rasSp
+  io.bpu_to_ftq.resp.bits.rasTop := predictor.io.bpu_to_ftq.resp.bits.rasTop
+  io.bpu_to_ftq.resp.bits.specCnt := predictor.io.bpu_to_ftq.resp.bits.specCnt.asUInt()
+  io.bpu_to_ftq.resp.bits.meta := predictor.io.bpu_to_ftq.resp.bits.meta
+  io.bpu_to_ftq.resp.bits.ftb_entry := predictor.io.bpu_to_ftq.resp.bits.ftb_entry
+  
 }

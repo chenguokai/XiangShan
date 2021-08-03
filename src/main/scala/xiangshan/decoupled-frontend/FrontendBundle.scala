@@ -84,9 +84,7 @@ class TableAddr(val idxBits: Int, val banks: Int)(implicit p: Parameters) extend
   def getBank(x: UInt) = if (banks > 1) getIdx(x)(log2Up(banks) - 1, 0) else 0.U
   def getBankIdx(x: UInt) = if (banks > 1) getIdx(x)(idxBits - 1, log2Up(banks)) else getIdx(x)
 }
-class BranchPrediction(implicit p: Parameters) extends XSBundle with HasBPUConst {
-  val taken_mask = Vec(numBr+1, Bool())
-  val is_br = Vec(numBr, Bool())
+class BranchPredictionBase(implicit p: Parameters) extends XSBundle with HasBPUConst {
   val is_jal = Bool()
   val is_jalr = Bool()
   val is_call = Bool()
@@ -94,11 +92,16 @@ class BranchPrediction(implicit p: Parameters) extends XSBundle with HasBPUConst
   val call_is_rvc = Bool()
   val target = UInt(VAddrBits.W)
   val hit = Bool()
+}
 
+class BranchPrediction(implicit p: Parameters) extends BranchPredictionBase {
+  val taken_mask = Vec(numBr+1, Bool())
+  val is_br = Vec(numBr, Bool())
   def taken = taken_mask.reduce(_||_) // || (is_jal || is_jalr)
+  
   def hit_taken_on_call = !VecInit(taken_mask.take(numBr)).asUInt.orR && hit && is_call
   def hit_taken_on_ret  = !VecInit(taken_mask.take(numBr)).asUInt.orR && hit && is_ret
-
+  
   override def toPrintable: Printable = {
     p"-----------BranchPrediction----------- " +
       p"[taken_mask] ${Binary(taken_mask.asUInt)} " +
@@ -108,19 +111,38 @@ class BranchPrediction(implicit p: Parameters) extends XSBundle with HasBPUConst
   }
 }
 
-class BranchPredictionBundle(implicit p: Parameters) extends XSBundle with HasBPUConst {
+class BranchPredictionWrapper(implicit p: Parameters) extends BranchPredictionBase {
+  val taken_mask = UInt((numBr+1).W)
+  val is_br = UInt(numBr.W)
+}
+
+class BranchPredictionBundleBase(implicit p: Parameters) extends XSBundle with HasBPUConst {
   val pc = UInt(VAddrBits.W)
   val hit = Bool()
-  val preds = new BranchPrediction
 
   val ghist = new GlobalHistory()
   val rasSp = UInt(log2Ceil(RasSize).W)
   val rasTop = new RASEntry
-  val specCnt = Vec(numBr, UInt(10.W))
   val meta = UInt(MaxMetaLength.W)
 
   val ftb_entry = new FTBEntry() // TODO: Send this entry to ftq
+}
 
+class BranchPredictionBundle(implicit p: Parameters) extends BranchPredictionBundleBase {
+  val preds = new BranchPrediction
+  val specCnt = Vec(numBr, UInt(10.W))
+  override def toPrintable: Printable = {
+    p"-----------BranchPredictionBundle----------- " +
+      p"[pc] ${Hexadecimal(pc)} [hit] $hit " +
+      p"[ghist] ${Binary(ghist.predHist)}  " +
+      preds.toPrintable +
+      ftb_entry.toPrintable
+  }
+}
+
+class BranchPredictionBundleWrapper(implicit p: Parameters) extends BranchPredictionBundleBase {
+  val preds = new BranchPredictionWrapper
+  val specCnt = UInt((numBr * 10).W)
   override def toPrintable: Printable = {
     p"-----------BranchPredictionBundle----------- " +
       p"[pc] ${Hexadecimal(pc)} [hit] $hit " +
@@ -137,12 +159,19 @@ class BranchPredictionResp(implicit p: Parameters) extends XSBundle with HasBPUC
   val s3 = new BranchPredictionBundle()
 }
 
-class BranchPredictionUpdate(implicit p: Parameters) extends BranchPredictionBundle with HasBPUConst {
-  val mispred_mask = Vec(numBr+1, Bool())
+class BranchPredictionUpdateBase(implicit p: Parameters) extends BranchPredictionBundle with HasBPUConst {
   val false_hit = Bool()
-  val new_br_insert_pos = Vec(numBr, Bool())
   // val ghist = new GlobalHistory() This in spec_meta
+}
 
+class BranchPredictionUpdateBaseWrapper(implicit p: Parameters) extends BranchPredictionBundleWrapper with HasBPUConst {
+  val false_hit = Bool()
+  // val ghist = new GlobalHistory() This in spec_meta
+}
+
+class BranchPredictionUpdate(implicit p: Parameters) extends BranchPredictionUpdateBase {
+  val mispred_mask = Vec(numBr+1, Bool())
+  val new_br_insert_pos = Vec(numBr, Bool())
   override def toPrintable: Printable = {
     p"-----------BranchPredictionUpdate----------- " +
       p"[mispred_mask] ${Binary(mispred_mask.asUInt)} [false_hit] ${Binary(false_hit)} " +
@@ -150,7 +179,11 @@ class BranchPredictionUpdate(implicit p: Parameters) extends BranchPredictionBun
       super.toPrintable +
       p"\n"
   }
+}
 
+class BranchPredictionUpdateWrapper(implicit p: Parameters) extends BranchPredictionUpdateBaseWrapper {
+  val mispred_mask = UInt((numBr+1).W)
+  val new_br_insert_pos = UInt(numBr.W)
 }
 
 class BranchPredictionRedirect(implicit p: Parameters) extends Redirect with HasBPUConst {
@@ -171,3 +204,5 @@ class BranchPredictionRedirect(implicit p: Parameters) extends Redirect with Has
 
   }
 }
+
+class BranchPredictionRedirectWrapper(implicit p: Parameters) extends RedirectWrapper with HasBPUConst {}

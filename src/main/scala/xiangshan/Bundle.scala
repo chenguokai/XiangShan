@@ -131,7 +131,7 @@ class PredictorAnswer(implicit p: Parameters) extends XSBundle {
 //   def fromUInt(x: UInt) = x.asTypeOf(this)
 // }
 
-class CfiUpdateInfo(implicit p: Parameters) extends XSBundle with HasBPUParameter {
+class CfiUpdateInfoBase(implicit p: Parameters) extends XSBundle with HasBPUParameter {
   // from backend
   val pc = UInt(VAddrBits.W)
   // frontend -> backend -> frontend
@@ -140,13 +140,20 @@ class CfiUpdateInfo(implicit p: Parameters) extends XSBundle with HasBPUParamete
   val rasEntry = new RASEntry
   val hist = new GlobalHistory
   val predHist = new GlobalHistory
-  val specCnt = Vec(numBr, UInt(10.W))
   // need pipeline update
   val br_hit = Bool()
   val predTaken = Bool()
   val target = UInt(VAddrBits.W)
   val taken = Bool()
   val isMisPred = Bool()
+}
+
+class CfiUpdateInfo(implicit p: Parameters) extends CfiUpdateInfoBase {
+  val specCnt = Vec(numBr, UInt(10.W))
+}
+
+class CfiUpdateInfoWrapper(implicit p: Parameters) extends CfiUpdateInfoBase {
+  val specCnt = UInt((numBr * 10).W)
 }
 
 // Dequeue DecodeWidth insts from Ibuffer
@@ -269,13 +276,12 @@ class MicroOpRbExt(implicit p: Parameters) extends XSBundle {
   val flag = UInt(1.W)
 }
 
-class Redirect(implicit p: Parameters) extends XSBundle {
+class RedirectBase(implicit p: Parameters) extends XSBundle {
   val roqIdx = new RoqPtr
   val ftqIdx = new FtqPtr
   val ftqOffset = UInt(log2Up(PredictWidth).W)
   val level = RedirectLevel()
   val interrupt = Bool()
-  val cfiUpdate = new CfiUpdateInfo
 
   val stFtqIdx = new FtqPtr // for load violation predict
   val stFtqOffset = UInt(log2Up(PredictWidth).W)
@@ -283,6 +289,14 @@ class Redirect(implicit p: Parameters) extends XSBundle {
   // def isUnconditional() = RedirectLevel.isUnconditional(level)
   def flushItself() = RedirectLevel.flushItself(level)
   // def isException() = RedirectLevel.isException(level)
+}
+
+class Redirect(implicit p: Parameters) extends RedirectBase {
+  val cfiUpdate = new CfiUpdateInfo
+}
+
+class RedirectWrapper(implicit p: Parameters) extends RedirectBase {
+  val cfiUpdate = new CfiUpdateInfoWrapper
 }
 
 class Dp1ToDp2IO(implicit p: Parameters) extends XSBundle {
