@@ -389,6 +389,10 @@ class Alu(implicit p: Parameters) extends FUWithRedirect {
   redirectOut.cfiUpdate.taken := dataModule.io.taken
   redirectOut.cfiUpdate.predTaken := uop.cf.pred_taken
 
+  when (redirectOutValid) {
+    printf(p"PC = 0x${Hexadecimal(uop.cf.pc)}, ROB Idx = 0x${Hexadecimal(uop.robIdx.asUInt())}, Mispred = 0x${dataModule.io.mispredict}")
+  }
+
   io.in.ready := io.out.ready
   io.out.valid := io.in.valid
   io.out.bits.uop <> io.in.bits.uop

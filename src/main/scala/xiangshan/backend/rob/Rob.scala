@@ -95,6 +95,11 @@ class RobDeqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
     // output: the CommitWidth deqPtr
     val out = Vec(CommitWidth, Output(new RobPtr))
     val next_out = Vec(CommitWidth, Output(new RobPtr))
+    
+    // debug only: commit delay counter and redirect valid info
+    val delay_counter = Vec(p(XSCoreParamsKey).RobSize, Input(UInt(32.W)))
+    val delay_valid = Vec(p(XSCoreParamsKey).RobSize, Input(Bool()))
+    val delay_pc = Vec(CommitWidth, Input(UInt(VAddrBits.W)))
   })
 
   val deqPtrVec = RegInit(VecInit((0 until CommitWidth).map(_.U.asTypeOf(new RobPtr))))
@@ -127,6 +132,16 @@ class RobDeqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
     XSInfo(io.state === 0.U && commitCnt > 0.U, "retired %d insts\n", commitCnt)
   }
 
+
+  when (io.state === 0.U && commitCnt > 0.U) {
+    // if we are committing inst, check if there are any retired branch that was redirected
+    for (i <- 0 until CommitWidth) {
+      when (i.U < commitCnt && io.delay_valid(deqPtrVec(i).value)) {
+        printf(p"PC = 0x${Hexadecimal(io.delay_pc(deqPtrVec(i).value))}, ROB Idx = 0x${Hexadecimal(deqPtrVec(i).value)}, delay = ${io.delay_counter(deqPtrVec(i).value)}")
+      }
+    }
+  }
+
 }
 
 class RobEnqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircularQueuePtrHelper {
@@ -138,18 +153,51 @@ class RobEnqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
     val hasBlockBackward = Input(Bool())
     val enq = Vec(RenameWidth, Input(Bool()))
     val out = Output(new RobPtr)
+
+    // for debug only
+    val delay_counter = Vec(p(XSCoreParamsKey).RobSize, Output(UInt(32.W)))
+    val delay_valid = Vec(p(XSCoreParamsKey).RobSize, Output(Bool()))
   })
 
   val enqPtr = RegInit(0.U.asTypeOf(new RobPtr))
 
+  val delay_counter = RegInit(VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(32.W))))
+  val delay_valid = RegInit(VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.B)))
+  io.delay_counter := delay_counter
+  io.delay_valid := delay_valid
   // enqueue
   val canAccept = io.allowEnqueue && !io.hasBlockBackward
   val dispatchNum = Mux(canAccept, PopCount(io.enq), 0.U)
 
+  // self ticking
+  for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+    delay_counter(i) := delay_counter(i) + 1.U
+  }
+
   when (io.redirect.valid) {
     enqPtr := io.redirect.bits.robIdx + Mux(io.redirect.bits.flushItself(), 0.U, 1.U)
+    
+    // only set delay_valid when redirect
+    when (io.redirect.bits.flushItself()) {
+      delay_valid(io.redirect.bits.robIdx.value) := 1.B;
+    }
+
   }.otherwise {
     enqPtr := enqPtr + dispatchNum
+    
+    // if no redirect, clear enqPtr + 1 to enqPtr + dispatchNum + 1
+    val lowerMask = VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(1.W)))
+    for (i <- 0 until p(XSCoreParamsKey).RobSize - 1) {
+      lowerMask(i) := Mux(i.U < enqPtr.value + 1.U, 1.U, 0.U)
+    }
+    val upperMask = VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(1.W)))
+    for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+      upperMask(i) := Mux(i.U < (enqPtr + dispatchNum).value + 1.U, 1.U, 0.U)
+    }
+    val clearMask = VecInit(lowerMask.zip(upperMask).map{ case (v, b) => v ^ b })
+    for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+      delay_valid(i) := delay_valid(i) & clearMask(i)
+    }
   }
 
   io.out := enqPtr
@@ -684,6 +732,10 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   enqPtrGenModule.io.enq := VecInit(io.enq.req.map(_.valid))
   enqPtr := enqPtrGenModule.io.out
 
+  deqPtrGenModule.io.delay_counter := enqPtrGenModule.io.delay_counter
+  deqPtrGenModule.io.delay_valid := enqPtrGenModule.io.delay_valid
+  deqPtrGenModule.io.delay_pc := VecInit(deqPtrVec.map(ptr => debug_microOp(ptr.value).cf.pc))
+  
   val thisCycleWalkCount = Mux(walkFinished, walkCounter, CommitWidth.U)
   // next walkPtrVec:
   // (1) redirect occurs: update according to state
@@ -725,6 +777,10 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
       redirectWalkDistance +& io.redirect.bits.flushItself() - commitCnt,
       redirectWalkDistance +& io.redirect.bits.flushItself()
     )
+    printf(p"PC = 0x${Hexadecimal(io.redirect.bits.cfiUpdate.pc)}, ROB Idx = 0x${Hexadecimal(io.redirect.bits.robIdx.value)}, delay = ${Mux(state === s_walk,
+      redirectWalkDistance +& io.redirect.bits.flushItself() - commitCnt,
+      redirectWalkDistance +& io.redirect.bits.flushItself()
+    )}")
   }.elsewhen (state === s_walk) {
     walkCounter := walkCounter - commitCnt
     XSInfo(p"rolling back: $enqPtr $deqPtr walk $walkPtr walkcnt $walkCounter\n")
