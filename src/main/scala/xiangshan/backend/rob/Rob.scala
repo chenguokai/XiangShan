@@ -137,7 +137,7 @@ class RobDeqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
     // if we are committing inst, check if there are any retired branch that was redirected
     for (i <- 0 until CommitWidth) {
       when (i.U < commitCnt && io.delay_valid(deqPtrVec(i).value)) {
-        printf(p"PC = 0x${Hexadecimal(io.delay_pc(deqPtrVec(i).value))}, ROB Idx = 0x${Hexadecimal(deqPtrVec(i).value)}, delay = ${io.delay_counter(deqPtrVec(i).value)}\n")
+        printf(p"PC = 0x${Hexadecimal(io.delay_pc(deqPtrVec(i).value - 1.U))}, ROB Idx = 0x${Hexadecimal(deqPtrVec(i).value - 1.U)}, delay = ${io.delay_counter(deqPtrVec(i).value)}\n")
       }
     }
   }
