@@ -137,7 +137,7 @@ class RobDeqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
     // if we are committing inst, check if there are any retired branch that was redirected
     for (i <- 0 until CommitWidth) {
       when (i.U < commitCnt && io.delay_valid(deqPtrVec(i).value)) {
-        printf(p"PC = 0x${Hexadecimal(io.delay_pc(deqPtrVec(i).value - 1.U))}, ROB Idx = 0x${Hexadecimal(deqPtrVec(i).value - 1.U)}, delay = ${io.delay_counter(deqPtrVec(i).value)}\n")
+        printf(p"PC = 0x${Hexadecimal(io.delay_pc(deqPtrVec(i).value - 1.U))}, ROB Idx = ${deqPtrVec(i).value - 1.U}, delay = ${io.delay_counter(deqPtrVec(i).value)}\n")
       }
     }
   }
@@ -781,10 +781,39 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
       redirectWalkDistance +& io.redirect.bits.flushItself() - commitCnt,
       redirectWalkDistance +& io.redirect.bits.flushItself()
     )
-    printf(p"PC = 0x${Hexadecimal(io.redirect.bits.cfiUpdate.pc)}, ROB Idx = 0x${Hexadecimal(io.redirect.bits.robIdx.value)}, flush = ${Mux(state === s_walk,
+    
+    //printf(p"PC = 0x${Hexadecimal(io.redirect.bits.cfiUpdate.pc)}, ROB Idx = ${io.redirect.bits.robIdx.value}, flush = ${Mux(state === s_walk,
+    //  redirectWalkDistance +& io.redirect.bits.flushItself() - commitCnt,
+    //  redirectWalkDistance +& io.redirect.bits.flushItself()
+    //)}, writebacked = ${writeback_count}\n")
+
+
+    // count rob entries that have been writeback
+    // from deqPtr to redirect robIdx
+    val lower_flush = deqPtr
+    val upper_flush = io.redirect.bits.robIdx
+
+    val lowerMask = VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(1.W)))
+    for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+      lowerMask(i) := Mux(i.U < (lower_flush.value).asTypeOf(UInt(32.W)), 1.U, 0.U)
+    }
+    val upperMask = VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(1.W)))
+    for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+      upperMask(i) := Mux(i.U < ((upper_flush).value).asTypeOf(UInt(32.W)), 1.U, 0.U)
+    }
+    val maskNoOverflow = upper_flush.value > lower_flush.value
+    val clearMask = VecInit(lowerMask.zip(upperMask).map{ case (v, b) => ~(v ^ b ^ maskNoOverflow)})
+    val writeback_cleared = VecInit(Seq.fill(p(XSCoreParamsKey).RobSize)(0.U(1.W)))
+    for (i <- 0 until p(XSCoreParamsKey).RobSize) {
+      writeback_cleared(i) := writebacked(i) & clearMask(i)
+    }
+    val writeback_count = Mux(lower_flush.value === upper_flush.value, 0.U, PopCount(writeback_cleared.asUInt()))
+    
+    printf(p"PC = 0x${Hexadecimal(io.redirect.bits.cfiUpdate.pc)}, ROB Idx = ${io.redirect.bits.robIdx.value}, flush = ${Mux(state === s_walk,
       redirectWalkDistance +& io.redirect.bits.flushItself() - commitCnt,
       redirectWalkDistance +& io.redirect.bits.flushItself()
-    )}\n")
+    )}, writebacked = ${writeback_count}\n")
+
   }.elsewhen (state === s_walk) {
     walkCounter := walkCounter - commitCnt
     XSInfo(p"rolling back: $enqPtr $deqPtr walk $walkPtr walkcnt $walkCounter\n")
