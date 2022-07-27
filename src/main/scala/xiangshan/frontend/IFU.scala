@@ -25,6 +25,7 @@ import xiangshan.cache.mmu._
 import xiangshan.frontend.icache._
 import utils._
 import xiangshan.backend.fu.{PMPReqBundle, PMPRespBundle}
+import huancun.utils.ChiselDB
 
 trait HasInstrMMIOConst extends HasXSParameter with HasIFUConst{
   def mmioBusWidth = 64
@@ -95,6 +96,24 @@ class IfuToPredChecker(implicit p: Parameters) extends XSBundle {
   val pc            = Vec(PredictWidth, UInt(VAddrBits.W))
 }
 
+class FetchToIBufferDB extends Bundle {
+  val start_addr = UInt(39.W)
+  val instr_count = UInt(32.W)
+  val exception = Bool()
+  val is_cache_hit = Bool()
+}
+
+class IfuWbToFtqDB extends Bundle {
+  val start_addr = UInt(39.W)
+  val is_miss_pred = Bool()
+  val miss_pred_offset = UInt(32.W)
+  val checkJalFault = Bool()
+  val checkRetFault = Bool()
+  val checkTargetFault = Bool()
+  val checkNotCFIFault = Bool()
+  val checkInvalidTaken = Bool()
+}
+
 class NewIFU(implicit p: Parameters) extends XSModule
   with HasICacheParameters
   with HasIFUConst
@@ -106,6 +125,9 @@ class NewIFU(implicit p: Parameters) extends XSModule
   val (toFtq, fromFtq)    = (io.ftqInter.toFtq, io.ftqInter.fromFtq)
   val (toICache, fromICache) = (VecInit(io.icacheInter.map(_.req)), VecInit(io.icacheInter.map(_.resp)))
   val (toUncache, fromUncache) = (io.uncacheInter.toUncache , io.uncacheInter.fromUncache)
+
+  val fetchToIBufferTable = ChiselDB.createTable("FetchToIBuffer", new FetchToIBufferDB)
+  val IfuWbToFtqTable = ChiselDB.createTable("IfuWbToFtq", new IfuWbToFtqDB)
 
   def isCrossLineReq(start: UInt, end: UInt): Bool = start(blockOffBits) ^ end(blockOffBits)
 
@@ -691,6 +713,7 @@ class NewIFU(implicit p: Parameters) extends XSModule
         wb_ftq_req.startAddr, wb_ftq_req.nextStartAddr, wb_ftq_req.ftqOffset.valid, wb_ftq_req.ftqOffset.bits)
   }
 
+
   /** performance counter */
   val f3_perf_info     = RegEnable(f2_perf_info,  f2_fire)
   val f3_req_0    = io.toIbuffer.fire()
@@ -731,4 +754,37 @@ class NewIFU(implicit p: Parameters) extends XSModule
   XSPerfAccumulate("hit_0_except_1",   f3_perf_info.hit_0_except_1 && io.toIbuffer.fire() )
   XSPerfAccumulate("miss_0_except_1",   f3_perf_info.miss_0_except_1 && io.toIbuffer.fire() )
   XSPerfAccumulate("except_0",   f3_perf_info.except_0 && io.toIbuffer.fire() )
+
+  val fetchIBufferDumpData = Wire(new FetchToIBufferDB)
+  fetchIBufferDumpData.start_addr := f3_ftq_req.startAddr
+  fetchIBufferDumpData.instr_count := PopCount(io.toIbuffer.bits.enqEnable)
+  fetchIBufferDumpData.exception := (f3_perf_info.except_0 && io.toIbuffer.fire()) || (f3_perf_info.hit_0_except_1 && io.toIbuffer.fire()) || (f3_perf_info.miss_0_except_1 && io.toIbuffer.fire())
+  fetchIBufferDumpData.is_cache_hit := f3_hit
+
+  val ifuWbToFtqDumpData = Wire(new IfuWbToFtqDB)
+  ifuWbToFtqDumpData.start_addr := wb_ftq_req.startAddr
+  ifuWbToFtqDumpData.is_miss_pred := checkFlushWb.bits.misOffset.valid
+  ifuWbToFtqDumpData.miss_pred_offset := checkFlushWb.bits.misOffset.bits
+  ifuWbToFtqDumpData.checkJalFault := checkJalFault
+  ifuWbToFtqDumpData.checkRetFault := checkRetFault
+  ifuWbToFtqDumpData.checkTargetFault := checkTargetFault
+  ifuWbToFtqDumpData.checkNotCFIFault := checkNotCFIFault
+  ifuWbToFtqDumpData.checkInvalidTaken := checkInvalidTaken
+
+  fetchToIBufferTable.log(
+    data = fetchIBufferDumpData,
+    en = io.toIbuffer.fire(),
+    site = "IFU",
+    clock = clock,
+    reset = reset
+  )
+  IfuWbToFtqTable.log(
+    data = ifuWbToFtqDumpData,
+    en = checkFlushWb.valid,
+    site = "IFU",
+    clock = clock,
+    reset = reset
+  )
+
+
 }
