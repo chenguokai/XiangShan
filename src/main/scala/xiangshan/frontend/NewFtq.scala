@@ -1050,7 +1050,7 @@ class Ftq(implicit p: Parameters) extends XSModule with HasCircularQueuePtrHelpe
     dbtable.log(
       data = logbundle /* hardware of type T */,
       en = v && do_commit && isCfi,
-      site = "MyCallSite",
+      site = "FTQ",
       clock = clock,
       reset = reset
     )
